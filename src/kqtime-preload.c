@@ -11,6 +11,7 @@ typedef size_t (*ReadFunc)(int, void*, int);
 typedef struct _KQTimePreload {
   KQTimePreloadHandlerFunc inHandler;
   KQTimePreloadHandlerFunc outHandler;
+  gpointer userData;
   SendFunc send;
   RecvFunc recv;
   WriteFunc write;
@@ -49,11 +50,12 @@ static void _kqtime_preload_deregister(int fd) {
   log("kqtime-preload: deregistered descriptor %d\n", fd);
 }
 
-void kqtime_preload_init(KQTimePreloadHandlerFunc inHandler,
-		KQTimePreloadHandlerFunc outHandler, KQTimePreloadRegisterFunc* reg,
-		KQTimePreloadRegisterFunc* dereg) {
+void kqtime_preload_init(gpointer userData,
+		KQTimePreloadHandlerFunc inHandler, KQTimePreloadHandlerFunc outHandler,
+		KQTimePreloadRegisterFunc* reg, KQTimePreloadRegisterFunc* dereg) {
 	g_assert(reg && dereg);
 
+	_state.userData = userData;
 	_state.inHandler = inHandler;
 	_state.outHandler = outHandler;
 
@@ -68,7 +70,7 @@ ssize_t send(int fd, const void *buf, size_t n, int flags) {
 	if (_state.outHandler && _state.registry
 			&& g_hash_table_lookup(_state.registry, GINT_TO_POINTER(fd))) {
         log("kqtime-preload: send() calling handler for %d\n", fd);
-		_state.outHandler(fd, buf, n);
+		_state.outHandler(_state.userData, fd, buf, n);
 	}
 
 	/* finally, let the OS handle this like normal */
@@ -82,7 +84,7 @@ ssize_t recv(int fd, void *buf, size_t n, int flags) {
 	if (_state.inHandler && _state.registry
 			&& g_hash_table_lookup(_state.registry, GINT_TO_POINTER(fd))) {
         log("kqtime-preload: recv() calling handler for %d\n", fd);
-		_state.inHandler(fd, buf, n);
+		_state.inHandler(_state.userData, fd, buf, n);
 	}
 
 	/* finally, let the OS handle this like normal */
@@ -96,7 +98,7 @@ ssize_t write(int fd, const void *buf, int n) {
 	if (_state.outHandler && _state.registry
 			&& g_hash_table_lookup(_state.registry, GINT_TO_POINTER(fd))) {
         log("kqtime-preload: write() calling handler for %d\n", fd);
-		_state.outHandler(fd, buf, (size_t) n);
+		_state.outHandler(_state.userData, fd, buf, (size_t) n);
 	}
 
 	/* finally, let the OS handle this like normal */
@@ -110,7 +112,7 @@ ssize_t read(int fd, void *buf, int n) {
 	if (_state.inHandler && _state.registry
 			&& g_hash_table_lookup(_state.registry, GINT_TO_POINTER(fd))) {
         log("kqtime-preload: read() calling handler for %d\n", fd);
-		_state.inHandler(fd, buf, n);
+		_state.inHandler(_state.userData, fd, buf, n);
 	}
 
 	/* finally, let the OS handle this like normal */

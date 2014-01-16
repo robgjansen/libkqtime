@@ -5,7 +5,7 @@
 
 typedef struct _KQTime KQTime;
 
-typedef void (*KQTimeFoundMatchFunc)(KQTime kqt, int fd,
+typedef void (*KQTimeFoundMatchFunc)(KQTime* kqt, int fd,
 		struct timeval tsArrived, struct timeval tsMatched);
 
 KQTime* kqtime_new(KQTimeFoundMatchFunc inMatchCallback,
