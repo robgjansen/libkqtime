@@ -53,14 +53,16 @@ static void _kqtime_preload_deregister(int fd) {
 void kqtime_preload_init(gpointer userData,
 		KQTimePreloadHandlerFunc inHandler, KQTimePreloadHandlerFunc outHandler,
 		KQTimePreloadRegisterFunc* reg, KQTimePreloadRegisterFunc* dereg) {
-	g_assert(reg && dereg);
-
 	_state.userData = userData;
 	_state.inHandler = inHandler;
 	_state.outHandler = outHandler;
 
-	*reg = _kqtime_preload_register;
-	*dereg = _kqtime_preload_deregister;
+	if(reg) {
+		*reg = _kqtime_preload_register;
+	}
+	if(dereg) {
+		*dereg = _kqtime_preload_deregister;
+	}
 }
 
 ssize_t send(int fd, const void *buf, size_t n, int flags) {
