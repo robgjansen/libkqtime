@@ -6,19 +6,19 @@ a library that tracks the queuing time of bytes traveling through the kernel
 
 ### out of source (recommended)
 
-'''
+```
 mkdir build
 cd build
 cmake .. -D<option>
 make
-'''
+```
 
 ### in source
 
-'''
+```
 cmake . -D<option>
 make
-'''
+```
 
 ### build <option>s
 
