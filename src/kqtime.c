@@ -596,6 +596,10 @@ static void _kqtime_freeStatsThreadWorkerHelper(GThread* thread, KQTimeStatsWork
 		g_thread_unref(thread);
 	}
 
+	if(worker->logFile) {
+		fclose(worker->logFile);
+	}
+
 	if(worker) {
 		if(worker->commands) {
 			g_async_queue_unref(worker->commands);
