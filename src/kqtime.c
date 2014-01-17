@@ -1,11 +1,13 @@
-#include <pcap.h>
-#include <glib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <linux/sockios.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <errno.h>
+
+#include <pcap.h>
+#include <glib.h>
+#include <glib/gstdio.h>
 
 #include "kqtime.h"
 #include "kqtime-preload.h"
@@ -32,7 +34,7 @@
 
 typedef enum _KQTimeCommandType {
 	KQTIME_CMD_NONE, KQTIME_CMD_READY, KQTIME_CMD_EXIT,
-	KQTIME_CMD_TAG, KQTIME_CMD_DATA,
+	KQTIME_CMD_TAG, KQTIME_CMD_DATA, KQTIME_CMD_LOG,
 	KQTIME_CMD_ADDFD, KQTIME_CMD_DELFD, KQTIME_CMD_COLLECT,
 } KQTimeCommandType;
 
@@ -41,20 +43,30 @@ typedef struct _KQTimeCommand {
 	gint fd;
 } KQTimeCommand;
 
+typedef struct _KQTimeFDCommand {
+	KQTimeCommand base;
+	gchar* fdName;
+} KQTimeFDCommand;
+
 typedef struct _KQTimeTagCommand {
 	KQTimeCommand base;
-	gpointer fdUserData;
 	guchar tag[KQTIME_TAG_LENGTH];
 	struct timeval tagTime;
 } KQTimeTagCommand;
 
 typedef struct _KQTimeDataCommand {
 	KQTimeCommand base;
-	gpointer fdUserData;
 	gpointer data;
 	gint dataLength;
 	struct timeval dataTime;
 } KQTimeDataCommand;
+
+typedef struct _KQTimeLogCommand {
+	KQTimeCommand base;
+	struct timeval tagTime;
+	struct timeval matchTime;
+	gboolean isInbound;
+} KQTimeLogCommand;
 
 typedef struct _KQTimePCapWorker {
 	GAsyncQueue* commands;
@@ -67,18 +79,17 @@ typedef struct _KQTimeSearchWorker {
 	GAsyncQueue* commands;
 	GAsyncQueue* pcapWorkerCommands;
 	GAsyncQueue* statsWorkerCommands;
-	KQTimeFoundMatchFunc matchCallback;
+	GAsyncQueue* logWorkerCommands;
 	gint fd;
-	gpointer fdUserData;
 	guchar tag[KQTIME_TAG_LENGTH];
 	gboolean hasTag;
 	struct timeval tagTime;
+	gboolean isInbound;
 } KQTimeSearchWorker;
 
 typedef struct _KQTimeStatsWorker {
 	GAsyncQueue* commands;
-	GString* status;
-	KQTimeStatsReportFunc statsReportCallback;
+	FILE* logFile;
 } KQTimeStatsWorker;
 
 struct _KQTime {
@@ -121,14 +132,13 @@ static const gchar* _kqtime_commandTypeToString(KQTimeCommandType t) {
 
 /* this is running in main thread, so keep it as short as possible */
 static void _kqtime_inboundInterposedDataHandler(KQTime* kqt,
-		gint fd, gconstpointer buf, gsize n, gpointer fdData) {
+		gint fd, gconstpointer buf, gsize n) {
 	/* if the worker has a tag, send it data */
 	if(kqt->inSearchWorker && kqt->inSearchWorker->hasTag) {
 		KQTimeDataCommand* dataCommand = g_new0(KQTimeDataCommand, 1);
 		gettimeofday(&dataCommand->dataTime, NULL);
 		dataCommand->base.type = KQTIME_CMD_DATA;
 		dataCommand->base.fd = fd;
-		dataCommand->fdUserData = fdData;
 		dataCommand->dataLength = (gint)n;
 		dataCommand->data = g_new(guchar, dataCommand->dataLength);
 		memcpy(dataCommand->data,buf, n);
@@ -138,7 +148,7 @@ static void _kqtime_inboundInterposedDataHandler(KQTime* kqt,
 
 /* this is running in main thread, so keep it as short as possible */
 static void _kqtime_outboundInterposedDataHandler(KQTime* kqt,
-		gint fd, gconstpointer buf, gsize n, gpointer fdData) {
+		gint fd, gconstpointer buf, gsize n) {
 	/* if the worker is idle, send it another tag */
 	if(kqt->outSearchWorker && !kqt->outSearchWorker->hasTag) {
 		if(n < ((gsize) KQTIME_TAG_OFFSET+KQTIME_TAG_LENGTH)) {
@@ -151,7 +161,6 @@ static void _kqtime_outboundInterposedDataHandler(KQTime* kqt,
 		KQTimeTagCommand* tagCommand = g_new0(KQTimeTagCommand, 1);
 		tagCommand->base.type = KQTIME_CMD_TAG;
 		tagCommand->base.fd = fd;
-		tagCommand->fdUserData = fdData;
 		tagCommand->tagTime = now;
 		memcpy(tagCommand->tag, &((const guchar*)buf)[KQTIME_TAG_OFFSET], KQTIME_TAG_LENGTH);
 		g_async_queue_push(kqt->outSearchWorker->commands, tagCommand);
@@ -208,7 +217,6 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 					/* tag commands sometimes contains the fd */
 					if(tagCommand->base.fd) {
 						worker->fd = tagCommand->base.fd;
-						worker->fdUserData = tagCommand->fdUserData;
 					}
 
 					/* notify the stats worker to collect */
@@ -233,7 +241,6 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 						/* data commands sometimes contains the fd */
 						if(dataCommand->base.fd) {
 							worker->fd = dataCommand->base.fd;
-							worker->fdUserData = dataCommand->fdUserData;
 						}
 
 						/* look for a match */
@@ -248,9 +255,18 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 								g_async_queue_push(worker->statsWorkerCommands, collectCommand);
 							}
 
-							/* tell the app we found a match, and the times */
-							worker->matchCallback(worker->fdUserData, worker->fd,
-									worker->tagTime, dataCommand->dataTime);
+							/* log the fact that we found a match, and the times */
+							if(worker->logWorkerCommands) {
+								KQTimeLogCommand* logCommand = g_new0(KQTimeLogCommand, 1);
+								logCommand->base.type = KQTIME_CMD_LOG;
+								logCommand->base.fd = worker->fd;
+								logCommand->tagTime = worker->tagTime;
+								logCommand->matchTime = dataCommand->dataTime;
+								logCommand->isInbound = worker->isInbound;
+								g_async_queue_push(worker->logWorkerCommands, logCommand);
+							}
+
+							/* we are ready to look for the next match */
 							isIdle = TRUE;
 						}
 					}
@@ -276,7 +292,6 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 		if(isIdle) {
 			worker->hasTag = FALSE;
 			worker->fd = 0;
-			worker->fdUserData = NULL;
 			command = g_new0(KQTimeCommand, 1);
 			command->type = KQTIME_CMD_READY;
 			g_async_queue_push(worker->pcapWorkerCommands, command);
@@ -404,27 +419,27 @@ static void _kqtime_collectStats(gpointer key, gpointer value, GString* status) 
 
 	optionLength = (socklen_t) sizeof(guint);
 	if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sendSize, &optionLength) < 0) {
-		log("kqtime: failed to obtain SNDBUF for socket %d: %s", fd, strerror(errno));
+		log("kqtime: failed to obtain SNDBUF for socket %d: %s\n", fd, strerror(errno));
 		numErrors++;
 	}
 
 	optionLength = (socklen_t) sizeof(guint);
 	if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &receiveSize, &optionLength)
 			< 0) {
-		log("kqtime: failed to obtain RCVBUF for socket %d: %s", fd, strerror(errno));
+		log("kqtime: failed to obtain RCVBUF for socket %d: %s\n", fd, strerror(errno));
 		numErrors++;
 	}
 
 #ifdef KQTIME_IOCTL_OUTQ
 	if (ioctl(fd, KQTIME_IOCTL_OUTQ, &sendLength) < 0) {
-		log("kqtime: failed to obtain OUTQLEN for socket %d: %s", fd, strerror(errno));
+		log("kqtime: failed to obtain OUTQLEN for socket %d: %s\n", fd, strerror(errno));
 		numErrors++;
 	}
 #endif
 
 #ifdef KQTIME_IOCTL_INQ
 	if (ioctl(fd, KQTIME_IOCTL_INQ, &receiveLength) < 0) {
-		log("kqtime: failed to obtain INQLEN for socket %d: %s", fd, strerror(errno));
+		log("kqtime: failed to obtain INQLEN for socket %d: %s\n", fd, strerror(errno));
 		numErrors++;
 	}
 #endif
@@ -440,7 +455,7 @@ static void _kqtime_statsWorkerThreadMain(KQTimeStatsWorker* worker) {
 	g_assert(worker);
 
 	gboolean doExit = FALSE;
-	GHashTable* descs = g_hash_table_new(g_direct_hash, g_direct_equal);
+	GHashTable* descs = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, g_free);
 
 	while (!doExit) {
 		/* wait for command */
@@ -450,12 +465,13 @@ static void _kqtime_statsWorkerThreadMain(KQTimeStatsWorker* worker) {
 			continue;
 		}
 
-		log("kqtime: got command %s for fd %d",
+		log("kqtime: got command %s for fd %d\n",
 				_kqtime_commandTypeToString(command->type), command->fd);
 
 		switch (command->type) {
 			case KQTIME_CMD_ADDFD: {
-				g_hash_table_replace(descs, GINT_TO_POINTER(command->fd), GINT_TO_POINTER(1));
+				KQTimeFDCommand* fdCommand = (KQTimeFDCommand*) command;
+				g_hash_table_replace(descs, GINT_TO_POINTER(command->fd), fdCommand->fdName);
 				break;
 			}
 
@@ -467,7 +483,7 @@ static void _kqtime_statsWorkerThreadMain(KQTimeStatsWorker* worker) {
 			case KQTIME_CMD_COLLECT: {
 				guint n = g_hash_table_size(descs);
 				if (n == 0) {
-					log("kqtime: skipping stats collection on empty hash table");
+					log("kqtime: skipping stats collection on empty hash table\n");
 					break;
 				}
 
@@ -480,10 +496,26 @@ static void _kqtime_statsWorkerThreadMain(KQTimeStatsWorker* worker) {
 				g_hash_table_foreach(descs, (GHFunc)_kqtime_collectStats, status);
 				gettimeofday(&end, NULL);
 
-				worker->statsReportCallback(start, end, n, status->str);
+				g_fprintf(worker->logFile, "KQTIME-STATS;%lu.%06lu,%lu.%06lu,%u;%s\n",
+						(gulong) start.tv_sec, (gulong) start.tv_usec,
+						(gulong) end.tv_sec, (gulong) end.tv_usec,
+						n, status->str);
 
 				g_string_free(status, TRUE);
 
+				break;
+			}
+
+			case KQTIME_CMD_LOG: {
+				KQTimeLogCommand* logCommand = (KQTimeLogCommand*) command;
+
+				gchar* fdName = g_hash_table_lookup(descs, GINT_TO_POINTER(logCommand->base.fd));
+
+				g_fprintf(worker->logFile, "KQTIME-%s;%lu.%06lu,%lu.%06lu,%d;%s\n",
+						logCommand->isInbound ? "IN" : "OUT",
+						(gulong) logCommand->tagTime.tv_sec, (gulong) logCommand->tagTime.tv_usec,
+						(gulong) logCommand->matchTime.tv_sec, (gulong) logCommand->matchTime.tv_usec,
+						logCommand->base.fd, fdName ? (gchar*)fdName : "NULL");
 				break;
 			}
 
@@ -592,15 +624,18 @@ void kqtime_free(KQTime* kqt) {
 	g_free(kqt);
 }
 
-KQTime* kqtime_new(KQTimeStatsReportFunc statsReportCallback,
-		KQTimeFoundMatchFunc inMatchCallback, KQTimeFoundMatchFunc outMatchCallback) {
+KQTime* kqtime_new(const gchar* logFilePath, gint logBufferStats, gint logInTimes, gint logOutTimes) {
+	if(!logFilePath) {
+		return NULL;
+	}
+
 	KQTime* kqt = g_new0(KQTime, 1);
 
 	/* lookup the init function in the dynamically loaded preload lib */
 	GET_PRELOAD_FUNC(kqt->preloadLibFuncs.init, "kqtime_preload_init");
 
 	if(!kqt->preloadLibFuncs.init) {
-		log("kqtime: unable to load kqtime_preload_init");
+		log("kqtime: unable to load kqtime_preload_init\n");
 		kqtime_free(kqt);
 		return NULL;
 	}
@@ -612,12 +647,25 @@ KQTime* kqtime_new(KQTimeStatsReportFunc statsReportCallback,
 			&kqt->preloadLibFuncs.reg, &kqt->preloadLibFuncs.dereg);
 
 	if (!kqt->preloadLibFuncs.reg || !kqt->preloadLibFuncs.dereg) {
-		log("kqtime: unable to get kqtime-preload registration functions");
+		log("kqtime: unable to get kqtime-preload registration functions\n");
 		kqtime_free(kqt);
 		return NULL;
 	}
 
-	if(inMatchCallback) {
+	/* we use the stats worker to log and to gather info from kernel */
+	if(logInTimes || logOutTimes || logBufferStats) {
+		kqt->statsWorker = g_new0(KQTimeStatsWorker, 1);
+		kqt->statsWorker->commands = g_async_queue_new();
+
+		kqt->statsWorker->logFile = g_fopen(logFilePath, "ab");
+		if(!kqt->statsWorker->logFile) {
+			log("kqtime: unable to open log file for appending\n");
+			kqtime_free(kqt);
+			return NULL;
+		}
+	}
+
+	if(logInTimes) {
 		kqt->inPCapWorker = g_new0(KQTimePCapWorker, 1);
 		kqt->inPCapWorker->isInbound = TRUE;
 		kqt->inPCapWorker->commands = g_async_queue_new();
@@ -629,12 +677,13 @@ KQTime* kqtime_new(KQTimeStatsReportFunc statsReportCallback,
 		}
 
 		kqt->inSearchWorker = g_new0(KQTimeSearchWorker, 1);
-		kqt->inSearchWorker->matchCallback = inMatchCallback;
+		kqt->inSearchWorker->isInbound = TRUE;
 		kqt->inSearchWorker->commands = g_async_queue_new();
 
 		/* make sure both inbound workers can communicate */
 		kqt->inPCapWorker->searchWorkerCommands = kqt->inSearchWorker->commands;
 		kqt->inSearchWorker->pcapWorkerCommands = kqt->inPCapWorker->commands;
+		kqt->inSearchWorker->logWorkerCommands = kqt->statsWorker->commands;
 
 		/* start up the threads */
 		kqt->inPCapThread = g_thread_new("kqtime-inbound-pcap-worker",
@@ -643,7 +692,7 @@ KQTime* kqtime_new(KQTimeStatsReportFunc statsReportCallback,
 				(GThreadFunc)_kqtime_searchWorkerThreadMain, kqt->inSearchWorker);
 	}
 
-	if(outMatchCallback) {
+	if(logOutTimes) {
 		kqt->outPCapWorker = g_new0(KQTimePCapWorker, 1);
 		kqt->outPCapWorker->isInbound = FALSE;
 		kqt->outPCapWorker->commands = g_async_queue_new();
@@ -655,12 +704,12 @@ KQTime* kqtime_new(KQTimeStatsReportFunc statsReportCallback,
 		}
 
 		kqt->outSearchWorker = g_new0(KQTimeSearchWorker, 1);
-		kqt->outSearchWorker->matchCallback = outMatchCallback;
 		kqt->outSearchWorker->commands = g_async_queue_new();
 
 		/* make sure both outbound workers can communicate */
 		kqt->outPCapWorker->searchWorkerCommands = kqt->outSearchWorker->commands;
 		kqt->outSearchWorker->pcapWorkerCommands = kqt->outPCapWorker->commands;
+		kqt->outSearchWorker->logWorkerCommands = kqt->statsWorker->commands;
 
 		/* start up the threads */
 		kqt->outPCapThread = g_thread_new("kqtime-outbound-pcap-worker",
@@ -669,44 +718,40 @@ KQTime* kqtime_new(KQTimeStatsReportFunc statsReportCallback,
 				(GThreadFunc)_kqtime_searchWorkerThreadMain, kqt->outSearchWorker);
 	}
 
-	if(statsReportCallback) {
-		kqt->statsWorker = g_new0(KQTimeStatsWorker, 1);
-		kqt->statsWorker->statsReportCallback = statsReportCallback;
-		kqt->statsWorker->commands = g_async_queue_new();
-
-		/* make sure the searchers can tell us when to collect stats */
+	if(logBufferStats) {
+		/* the searchers should tell us when to collect stats */
 		if(kqt->inSearchWorker) {
 			kqt->inSearchWorker->statsWorkerCommands = kqt->statsWorker->commands;
 		}
 		if(kqt->outSearchWorker) {
 			kqt->outSearchWorker->statsWorkerCommands = kqt->statsWorker->commands;
 		}
-
-		/* start the thread */
-		kqt->statsThread = g_thread_new("kqtime-stats-worker",
-				(GThreadFunc)_kqtime_statsWorkerThreadMain, kqt->statsWorker);
 	}
+	/* start the stats/logging thread */
+	kqt->statsThread = g_thread_new("kqtime-stats-worker",
+			(GThreadFunc)_kqtime_statsWorkerThreadMain, kqt->statsWorker);
 
-	log("kqtime: successfully initialized");
+	log("kqtime: successfully initialized\n");
 
 	return kqt;
 }
 
-void* kqtime_register(KQTime* kqt, gint fd, gpointer fdUserData) {
+void kqtime_register(KQTime* kqt, gint fd, const gchar* fdName) {
 	g_assert(kqt && kqt->preloadLibFuncs.reg);
 
 	/* notify the stats worker */
 	if(kqt->statsWorker) {
-		KQTimeCommand* addFDCommand = g_new0(KQTimeCommand, 1);
-		addFDCommand->type = KQTIME_CMD_ADDFD;
-		addFDCommand->fd = fd;
+		KQTimeFDCommand* addFDCommand = g_new0(KQTimeFDCommand, 1);
+		addFDCommand->base.type = KQTIME_CMD_ADDFD;
+		addFDCommand->base.fd = fd;
+		addFDCommand->fdName = g_strdup(fdName);
 		g_async_queue_push(kqt->statsWorker->commands, addFDCommand);
 	}
 
-	return kqt->preloadLibFuncs.reg(fd, fdUserData);
+	kqt->preloadLibFuncs.reg(fd);
 }
 
-void* kqtime_deregister(KQTime* kqt, gint fd) {
+void kqtime_deregister(KQTime* kqt, gint fd) {
 	g_assert(kqt && kqt->preloadLibFuncs.dereg);
 
 	/* notify the stats worker */
@@ -717,5 +762,5 @@ void* kqtime_deregister(KQTime* kqt, gint fd) {
 		g_async_queue_push(kqt->statsWorker->commands, delFDCommand);
 	}
 
-	return kqt->preloadLibFuncs.dereg(fd);
+	kqt->preloadLibFuncs.dereg(fd);
 }

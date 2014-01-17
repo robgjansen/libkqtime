@@ -40,18 +40,14 @@ void __attribute__((destructor)) destruct() {
 	log("kqtime-preload: destructed\n");
 }
 
-static void* _kqtime_preload_register(int fd, void* fdUserData) {
-	gpointer prevFDUserData = g_hash_table_lookup(_state.registry, GINT_TO_POINTER(fd));
-	g_hash_table_replace(_state.registry, GINT_TO_POINTER(fd), fdUserData);
+static void _kqtime_preload_register(int fd) {
+	g_hash_table_replace(_state.registry, GINT_TO_POINTER(fd), GINT_TO_POINTER(1));
 	log("kqtime-preload: registered descriptor %d\n", fd);
-	return prevFDUserData;
 }
 
-static void* _kqtime_preload_deregister(int fd) {
-	gpointer prevFDUserData = g_hash_table_lookup(_state.registry, GINT_TO_POINTER(fd));
-	g_hash_table_remove(_state.registry, GINT_TO_POINTER(fd) );
+static void _kqtime_preload_deregister(int fd) {
+	g_hash_table_remove(_state.registry, GINT_TO_POINTER(fd));
 	log("kqtime-preload: deregistered descriptor %d\n", fd);
-	return prevFDUserData;
 }
 
 void kqtime_preload_init(gpointer userData,
@@ -73,12 +69,10 @@ ssize_t send(int fd, const void *buf, size_t n, int flags) {
 	log("kqtime-preload: send() for %d\n", fd);
 
 	/* intercept the sys call and send to handler first, but only if the fd is registered */
-	if (_state.outHandler && _state.registry) {
-		gpointer fdUserData = NULL;
-		if(g_hash_table_lookup_extended(_state.registry, GINT_TO_POINTER(fd), NULL, &fdUserData)) {
-			log("kqtime-preload: send() calling handler for %d\n", fd);
-			_state.outHandler(_state.userData, fd, buf, n, fdUserData);
-		}
+	if (_state.outHandler && _state.registry &&
+			g_hash_table_lookup(_state.registry, GINT_TO_POINTER(fd))) {
+		log("kqtime-preload: send() calling handler for %d\n", fd);
+		_state.outHandler(_state.userData, fd, buf, n);
 	}
 
 	/* finally, let the OS handle this like normal */
@@ -89,12 +83,10 @@ ssize_t write(int fd, const void *buf, int n) {
     log("kqtime-preload: write() for %d\n", fd);
 
 	/* intercept the sys call and send to handler first, but only if the fd is registered */
-	if (_state.outHandler && _state.registry) {
-		gpointer fdUserData = NULL;
-		if(g_hash_table_lookup_extended(_state.registry, GINT_TO_POINTER(fd), NULL, &fdUserData)) {
-			log("kqtime-preload: write() calling handler for %d\n", fd);
-			_state.outHandler(_state.userData, fd, buf, (size_t) n, fdUserData);
-		}
+	if (_state.outHandler && _state.registry &&
+			g_hash_table_lookup(_state.registry, GINT_TO_POINTER(fd))) {
+		log("kqtime-preload: write() calling handler for %d\n", fd);
+		_state.outHandler(_state.userData, fd, buf, (size_t) n);
 	}
 
 	/* finally, let the OS handle this like normal */
@@ -108,13 +100,11 @@ ssize_t recv(int fd, void *buf, size_t n, int flags) {
 	ssize_t numBytes = _state.recv(fd, buf, n, flags);
 
 	/* interpose and send to handler, but only if the fd is registered */
-	if (_state.inHandler && _state.registry) {
-		gpointer fdUserData = NULL;
-		if(g_hash_table_lookup_extended(_state.registry, GINT_TO_POINTER(fd), NULL, &fdUserData)) {
-			size_t lengthArg = numBytes > 0 ? (size_t) numBytes : 0;
-			log("kqtime-preload: recv() calling handler for %d\n", fd);
-			_state.inHandler(_state.userData, fd, buf, lengthArg, fdUserData);
-		}
+	if (_state.inHandler && _state.registry &&
+			g_hash_table_lookup(_state.registry, GINT_TO_POINTER(fd))) {
+		size_t lengthArg = numBytes > 0 ? (size_t) numBytes : 0;
+		log("kqtime-preload: recv() calling handler for %d\n", fd);
+		_state.inHandler(_state.userData, fd, buf, lengthArg);
 	}
 
 	/* return the sys return value */
@@ -128,13 +118,11 @@ ssize_t read(int fd, void *buf, int n) {
 	ssize_t numBytes = _state.read(fd, buf, n);
 
 	/* interpose and send to handler, but only if the fd is registered */
-	if (_state.inHandler && _state.registry) {
-		gpointer fdUserData = NULL;
-		if(g_hash_table_lookup_extended(_state.registry, GINT_TO_POINTER(fd), NULL, &fdUserData)) {
-			size_t lengthArg = numBytes > 0 ? (size_t) numBytes : 0;
-			log("kqtime-preload: read() calling handler for %d\n", fd);
-			_state.inHandler(_state.userData, fd, buf, lengthArg, fdUserData);
-		}
+	if (_state.inHandler && _state.registry &&
+			g_hash_table_lookup(_state.registry, GINT_TO_POINTER(fd))) {
+		size_t lengthArg = numBytes > 0 ? (size_t) numBytes : 0;
+		log("kqtime-preload: read() calling handler for %d\n", fd);
+		_state.inHandler(_state.userData, fd, buf, lengthArg);
 	}
 
 	/* return the sys return value */
