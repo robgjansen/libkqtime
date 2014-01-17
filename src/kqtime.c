@@ -1,6 +1,11 @@
 #include <pcap.h>
 #include <glib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <linux/sockios.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <errno.h>
 
 #include "kqtime.h"
 #include "kqtime-preload.h"
@@ -9,18 +14,35 @@
 #define KQTIME_TAG_LENGTH 16
 #define KQTIME_MAX_SEARCH_TIME 2
 
+#undef IOCTL_INQ
+#ifdef SIOCINQ
+#define IOCTL_INQ SIOCINQ
+#elif defined ( TIOCINQ )
+#define IOCTL_INQ TIOCINQ
+#elif defined ( FIONREAD )
+#define IOCTL_INQ FIONREAD
+#endif
+
+#undef IOCTL_OUTQ
+#ifdef SIOCOUTQ
+#define IOCTL_OUTQ SIOCOUTQ
+#elif defined ( TIOCOUTQ )
+#define IOCTL_OUTQ TIOCOUTQ
+#endif
+
 typedef enum _KQTimeCommandType {
 	KQTIME_CMD_NONE, KQTIME_CMD_READY, KQTIME_CMD_EXIT,
 	KQTIME_CMD_TAG, KQTIME_CMD_DATA,
+	KQTIME_CMD_ADDFD, KQTIME_CMD_DELFD, KQTIME_CMD_COLLECT,
 } KQTimeCommandType;
 
 typedef struct _KQTimeCommand {
 	KQTimeCommandType type;
+	gint fd;
 } KQTimeCommand;
 
 typedef struct _KQTimeTagCommand {
 	KQTimeCommand base;
-	gint fd;
 	gpointer fdUserData;
 	guchar tag[KQTIME_TAG_LENGTH];
 	struct timeval tagTime;
@@ -28,7 +50,6 @@ typedef struct _KQTimeTagCommand {
 
 typedef struct _KQTimeDataCommand {
 	KQTimeCommand base;
-	gint fd;
 	gpointer fdUserData;
 	gpointer data;
 	gint dataLength;
@@ -45,6 +66,7 @@ typedef struct _KQTimePCapWorker {
 typedef struct _KQTimeSearchWorker {
 	GAsyncQueue* commands;
 	GAsyncQueue* pcapWorkerCommands;
+	GAsyncQueue* statsWorkerCommands;
 	KQTimeFoundMatchFunc matchCallback;
 	gint fd;
 	gpointer fdUserData;
@@ -52,6 +74,12 @@ typedef struct _KQTimeSearchWorker {
 	gboolean hasTag;
 	struct timeval tagTime;
 } KQTimeSearchWorker;
+
+typedef struct _KQTimeStatsWorker {
+	GAsyncQueue* commands;
+	GString* status;
+	KQTimeStatsReportFunc statsReportCallback;
+} KQTimeStatsWorker;
 
 struct _KQTime {
 	struct {
@@ -71,7 +99,25 @@ struct _KQTime {
 
 	GThread* outSearchThread;
 	KQTimeSearchWorker* outSearchWorker;
+
+	GThread* statsThread;
+	KQTimeStatsWorker* statsWorker;
 };
+
+static const gchar* _kqtime_commandTypeToString(KQTimeCommandType t) {
+  switch(t) {
+	  case KQTIME_CMD_READY: return "READY";
+	  case KQTIME_CMD_EXIT: return "EXIT";
+	  case KQTIME_CMD_TAG: return "TAG";
+	  case KQTIME_CMD_DATA: return "DATA";
+	  case KQTIME_CMD_ADDFD: return "ADDFD";
+	  case KQTIME_CMD_DELFD: return "DELFD";
+	  case KQTIME_CMD_COLLECT: return "COLLECT";
+	  case KQTIME_CMD_NONE: return "NONE";
+	  default: break;
+  }
+  return "ERR";
+}
 
 /* this is running in main thread, so keep it as short as possible */
 static void _kqtime_inboundInterposedDataHandler(KQTime* kqt,
@@ -81,7 +127,7 @@ static void _kqtime_inboundInterposedDataHandler(KQTime* kqt,
 		KQTimeDataCommand* dataCommand = g_new0(KQTimeDataCommand, 1);
 		gettimeofday(&dataCommand->dataTime, NULL);
 		dataCommand->base.type = KQTIME_CMD_DATA;
-		dataCommand->fd = fd;
+		dataCommand->base.fd = fd;
 		dataCommand->fdUserData = fdData;
 		dataCommand->dataLength = (gint)n;
 		dataCommand->data = g_new(guchar, dataCommand->dataLength);
@@ -104,7 +150,7 @@ static void _kqtime_outboundInterposedDataHandler(KQTime* kqt,
 
 		KQTimeTagCommand* tagCommand = g_new0(KQTimeTagCommand, 1);
 		tagCommand->base.type = KQTIME_CMD_TAG;
-		tagCommand->fd = fd;
+		tagCommand->base.fd = fd;
 		tagCommand->fdUserData = fdData;
 		tagCommand->tagTime = now;
 		memcpy(tagCommand->tag, &((const guchar*)buf)[KQTIME_TAG_OFFSET], KQTIME_TAG_LENGTH);
@@ -160,9 +206,16 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 					worker->hasTag = TRUE;
 
 					/* tag commands sometimes contains the fd */
-					if(tagCommand->fd) {
-						worker->fd = tagCommand->fd;
+					if(tagCommand->base.fd) {
+						worker->fd = tagCommand->base.fd;
 						worker->fdUserData = tagCommand->fdUserData;
+					}
+
+					/* notify the stats worker to collect */
+					if(worker->statsWorkerCommands) {
+						KQTimeCommand* collectCommand = g_new0(KQTimeCommand, 1);
+						collectCommand->type = KQTIME_CMD_COLLECT;
+						g_async_queue_push(worker->statsWorkerCommands, collectCommand);
 					}
 				}
 				break;
@@ -178,8 +231,8 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 						isIdle = TRUE;
 					} else {
 						/* data commands sometimes contains the fd */
-						if(dataCommand->fd) {
-							worker->fd = dataCommand->fd;
+						if(dataCommand->base.fd) {
+							worker->fd = dataCommand->base.fd;
 							worker->fdUserData = dataCommand->fdUserData;
 						}
 
@@ -187,8 +240,15 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 						gint match = _kqtime_findByteMatch((u_char *)dataCommand->data,
 								dataCommand->dataLength, (u_char *)worker->tag, KQTIME_TAG_LENGTH);
 
-						/* tell the app we found a match, and the times */
 						if (match) {
+							/* notify the stats worker to collect */
+							if(worker->statsWorkerCommands) {
+								KQTimeCommand* collectCommand = g_new0(KQTimeCommand, 1);
+								collectCommand->type = KQTIME_CMD_COLLECT;
+								g_async_queue_push(worker->statsWorkerCommands, collectCommand);
+							}
+
+							/* tell the app we found a match, and the times */
 							worker->matchCallback(worker->fdUserData, worker->fd,
 									worker->tagTime, dataCommand->dataTime);
 							isIdle = TRUE;
@@ -205,8 +265,6 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 				break;
 			}
 
-			case KQTIME_CMD_READY:
-			case KQTIME_CMD_NONE:
 			default:
 				break;
 		}
@@ -265,9 +323,6 @@ static void _kqtime_handlePacket(KQTimePCapWorker* worker,
 				break;
 			}
 
-			case KQTIME_CMD_TAG:
-			case KQTIME_CMD_DATA:
-			case KQTIME_CMD_NONE:
 			default:
 				break;
 		}
@@ -337,6 +392,117 @@ static pcap_t* _kqtime_newPCap(pcap_direction_t pcapdir, int snaplen) {
 	return handle;
 }
 
+static void _kqtime_collectStats(gpointer key, gpointer value, GString* status) {
+	if (!key) {
+		return;
+	}
+
+	gint fd = GPOINTER_TO_INT(key);
+	gint numErrors = 0;
+	guint sendSize = 0, receiveSize = 0, sendLength = 0, receiveLength = 0;
+	socklen_t optionLength;
+
+	optionLength = (socklen_t) sizeof(guint);
+	if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sendSize, &optionLength) < 0) {
+		log("kqtime: failed to obtain SNDBUF for socket %d: %s", fd, strerror(errno));
+		numErrors++;
+	}
+
+	optionLength = (socklen_t) sizeof(guint);
+	if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &receiveSize, &optionLength)
+			< 0) {
+		log("kqtime: failed to obtain RCVBUF for socket %d: %s", fd, strerror(errno));
+		numErrors++;
+	}
+
+#ifdef IOCTL_OUTQ
+	if (ioctl(fd, IOCTL_OUTQ, &sendLength) < 0) {
+		log("kqtime: failed to obtain OUTQLEN for socket %d: %s", fd, strerror(errno));
+		numErrors++;
+	}
+#endif
+
+#ifdef IOCTL_INQ
+	if (ioctl(fd, IOCTL_INQ, &receiveLength) < 0) {
+		log("kqtime: failed to obtain INQLEN for socket %d: %s", fd, strerror(errno));
+		numErrors++;
+	}
+#endif
+
+	if (numErrors == 0 && status) {
+		g_string_append_printf(status,
+				"desc=%d,snd_sz=%u,snd_len=%u,rcv_sz=%u,rcv_len=%u;", fd,
+				sendSize, sendLength, receiveSize, receiveLength);
+	}
+}
+
+static void _kqtime_statsWorkerThreadMain(KQTimeStatsWorker* worker) {
+	g_assert(worker);
+
+	gboolean doExit = FALSE;
+	GHashTable* descs = g_hash_table_new(g_direct_hash, g_direct_equal);
+
+	while (!doExit) {
+		/* wait for command */
+		KQTimeCommand* command = g_async_queue_pop(worker->commands);
+
+		if (!command) {
+			continue;
+		}
+
+		log("kqtime: got command %s for fd %d",
+				_kqtime_commandTypeToString(command->type), command->fd);
+
+		switch (command->type) {
+			case KQTIME_CMD_ADDFD: {
+				g_hash_table_replace(descs, GINT_TO_POINTER(command->fd), GINT_TO_POINTER(1));
+				break;
+			}
+
+			case KQTIME_CMD_DELFD: {
+				g_hash_table_remove(descs, GINT_TO_POINTER(command->fd));
+				break;
+			}
+
+			case KQTIME_CMD_COLLECT: {
+				guint n = g_hash_table_size(descs);
+				if (n == 0) {
+					log("kqtime: skipping stats collection on empty hash table");
+					break;
+				}
+
+				GString* status = g_string_new(NULL);
+
+				struct timeval start;
+				struct timeval end;
+
+				gettimeofday(&start, NULL);
+				g_hash_table_foreach(descs, (GHFunc)_kqtime_collectStats, status);
+				gettimeofday(&end, NULL);
+
+				worker->statsReportCallback(start, end, n, status->str);
+
+				g_string_free(status, TRUE);
+
+				break;
+			}
+
+			case KQTIME_CMD_EXIT: {
+				doExit = TRUE;
+				break;
+			}
+
+			default: {
+				break;
+			}
+		}
+
+		g_free(command);
+	}
+
+	g_hash_table_destroy(descs);
+}
+
 static void _kqtime_freePCapThreadWorkerHelper(GThread* thread, KQTimePCapWorker* worker) {
 	if(thread) {
 		/* tell the thread to exit */
@@ -384,6 +550,28 @@ static void _kqtime_freeSearchThreadWorkerHelper(GThread* thread, KQTimeSearchWo
 	}
 }
 
+static void _kqtime_freeStatsThreadWorkerHelper(GThread* thread, KQTimeStatsWorker* worker) {
+	if(thread) {
+		/* tell the thread to exit */
+		if(worker && worker->commands) {
+			KQTimeCommand* exitCommand = g_new0(KQTimeCommand, 1);
+			exitCommand->type = KQTIME_CMD_EXIT;
+			g_async_queue_push(worker->commands, exitCommand);
+		}
+
+		/* wait for the thread to exit */
+		g_thread_join(thread);
+		g_thread_unref(thread);
+	}
+
+	if(worker) {
+		if(worker->commands) {
+			g_async_queue_unref(worker->commands);
+		}
+		g_free(worker);
+	}
+}
+
 void kqtime_free(KQTime* kqt) {
 	g_assert(kqt);
 
@@ -399,11 +587,13 @@ void kqtime_free(KQTime* kqt) {
 	_kqtime_freeSearchThreadWorkerHelper(kqt->inSearchThread, kqt->inSearchWorker);
 	_kqtime_freeSearchThreadWorkerHelper(kqt->outSearchThread, kqt->outSearchWorker);
 
+	_kqtime_freeStatsThreadWorkerHelper(kqt->statsThread, kqt->statsWorker);
+
 	g_free(kqt);
 }
 
-KQTime* kqtime_new(KQTimeFoundMatchFunc inMatchCallback,
-		KQTimeFoundMatchFunc outMatchCallback) {
+KQTime* kqtime_new(KQTimeStatsReportFunc statsReportCallback,
+		KQTimeFoundMatchFunc inMatchCallback, KQTimeFoundMatchFunc outMatchCallback) {
 	KQTime* kqt = g_new0(KQTime, 1);
 
 	/* lookup the init function in the dynamically loaded preload lib */
@@ -442,9 +632,11 @@ KQTime* kqtime_new(KQTimeFoundMatchFunc inMatchCallback,
 		kqt->inSearchWorker->matchCallback = inMatchCallback;
 		kqt->inSearchWorker->commands = g_async_queue_new();
 
+		/* make sure both inbound workers can communicate */
 		kqt->inPCapWorker->searchWorkerCommands = kqt->inSearchWorker->commands;
 		kqt->inSearchWorker->pcapWorkerCommands = kqt->inPCapWorker->commands;
 
+		/* start up the threads */
 		kqt->inPCapThread = g_thread_new("kqtime-inbound-pcap-worker",
 						(GThreadFunc)_kqtime_pcapWorkerThreadMain, kqt->inPCapWorker);
 		kqt->inSearchThread = g_thread_new("kqtime-inbound-search-worker",
@@ -466,13 +658,33 @@ KQTime* kqtime_new(KQTimeFoundMatchFunc inMatchCallback,
 		kqt->outSearchWorker->matchCallback = outMatchCallback;
 		kqt->outSearchWorker->commands = g_async_queue_new();
 
+		/* make sure both outbound workers can communicate */
 		kqt->outPCapWorker->searchWorkerCommands = kqt->outSearchWorker->commands;
 		kqt->outSearchWorker->pcapWorkerCommands = kqt->outPCapWorker->commands;
 
+		/* start up the threads */
 		kqt->outPCapThread = g_thread_new("kqtime-outbound-pcap-worker",
 						(GThreadFunc)_kqtime_pcapWorkerThreadMain, kqt->outPCapWorker);
 		kqt->outSearchThread = g_thread_new("kqtime-outbound-search-worker",
 				(GThreadFunc)_kqtime_searchWorkerThreadMain, kqt->outSearchWorker);
+	}
+
+	if(statsReportCallback) {
+		kqt->statsWorker = g_new0(KQTimeStatsWorker, 1);
+		kqt->statsWorker->statsReportCallback = statsReportCallback;
+		kqt->statsWorker->commands = g_async_queue_new();
+
+		/* make sure the searchers can tell us when to collect stats */
+		if(kqt->inSearchWorker) {
+			kqt->inSearchWorker->statsWorkerCommands = kqt->statsWorker->commands;
+		}
+		if(kqt->outSearchWorker) {
+			kqt->outSearchWorker->statsWorkerCommands = kqt->statsWorker->commands;
+		}
+
+		/* start the thread */
+		kqt->statsThread = g_thread_new("kqtime-stats-worker",
+				(GThreadFunc)_kqtime_statsWorkerThreadMain, kqt->statsWorker);
 	}
 
 	log("kqtime: successfully initialized");
@@ -480,12 +692,30 @@ KQTime* kqtime_new(KQTimeFoundMatchFunc inMatchCallback,
 	return kqt;
 }
 
-void* kqtime_register(KQTime* kqt, int fd, void* fdUserData) {
+void* kqtime_register(KQTime* kqt, gint fd, gpointer fdUserData) {
 	g_assert(kqt && kqt->preloadLibFuncs.reg);
+
+	/* notify the stats worker */
+	if(kqt->statsWorker) {
+		KQTimeCommand* addFDCommand = g_new0(KQTimeCommand, 1);
+		addFDCommand->type = KQTIME_CMD_ADDFD;
+		addFDCommand->fd = fd;
+		g_async_queue_push(kqt->statsWorker->commands, addFDCommand);
+	}
+
 	return kqt->preloadLibFuncs.reg(fd, fdUserData);
 }
 
-void* kqtime_deregister(KQTime* kqt, int fd) {
+void* kqtime_deregister(KQTime* kqt, gint fd) {
 	g_assert(kqt && kqt->preloadLibFuncs.dereg);
+
+	/* notify the stats worker */
+	if(kqt->statsWorker) {
+		KQTimeCommand* delFDCommand = g_new0(KQTimeCommand, 1);
+		delFDCommand->type = KQTIME_CMD_DELFD;
+		delFDCommand->fd = fd;
+		g_async_queue_push(kqt->statsWorker->commands, delFDCommand);
+	}
+
 	return kqt->preloadLibFuncs.dereg(fd);
 }
