@@ -20,7 +20,7 @@ cmake . -D<option>
 make
 ```
 
-### build <option>s
+### build options
 
  + `CMAKE_BUILD_TYPE=Debug`
  + `CMAKE_INSTALL_PREFIX=path/to/install`
