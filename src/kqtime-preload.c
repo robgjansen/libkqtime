@@ -85,22 +85,6 @@ ssize_t send(int fd, const void *buf, size_t n, int flags) {
 	return _state.send(fd, buf, n, flags);
 }
 
-ssize_t recv(int fd, void *buf, size_t n, int flags) {
-	log("kqtime-preload: recv() for %d\n", fd);
-
-	/* intercept the sys call and send to handler first, but only if the fd is registered */
-	if (_state.inHandler && _state.registry) {
-		gpointer fdUserData = NULL;
-		if(g_hash_table_lookup_extended(_state.registry, GINT_TO_POINTER(fd), NULL, &fdUserData)) {
-			log("kqtime-preload: recv() calling handler for %d\n", fd);
-			_state.inHandler(_state.userData, fd, buf, n, fdUserData);
-		}
-	}
-
-	/* finally, let the OS handle this like normal */
-	return _state.recv(fd, buf, n, flags);
-}
-
 ssize_t write(int fd, const void *buf, int n) {
     log("kqtime-preload: write() for %d\n", fd);
 
@@ -117,19 +101,43 @@ ssize_t write(int fd, const void *buf, int n) {
 	return _state.write(fd, buf, n);
 }
 
-ssize_t read(int fd, void *buf, int n) {
-	log("kqtime-preload: read() for %d\n", fd);
+ssize_t recv(int fd, void *buf, size_t n, int flags) {
+	log("kqtime-preload: recv() for %d\n", fd);
 
-	/* intercept the sys call and send to handler first, but only if the fd is registered */
+	/* first let the OS give us data */
+	ssize_t numBytes = _state.recv(fd, buf, n, flags);
+
+	/* interpose and send to handler, but only if the fd is registered */
 	if (_state.inHandler && _state.registry) {
 		gpointer fdUserData = NULL;
 		if(g_hash_table_lookup_extended(_state.registry, GINT_TO_POINTER(fd), NULL, &fdUserData)) {
-			log("kqtime-preload: read() calling handler for %d\n", fd);
-			_state.inHandler(_state.userData, fd, buf, n, fdUserData);
+			size_t lengthArg = numBytes > 0 ? (size_t) numBytes : 0;
+			log("kqtime-preload: recv() calling handler for %d\n", fd);
+			_state.inHandler(_state.userData, fd, buf, lengthArg, fdUserData);
 		}
 	}
 
-	/* finally, let the OS handle this like normal */
-	return _state.read(fd, buf, n);
+	/* return the sys return value */
+	return numBytes;
+}
+
+ssize_t read(int fd, void *buf, int n) {
+	log("kqtime-preload: read() for %d\n", fd);
+
+	/* first let the OS give us data */
+	ssize_t numBytes = _state.read(fd, buf, n);
+
+	/* interpose and send to handler, but only if the fd is registered */
+	if (_state.inHandler && _state.registry) {
+		gpointer fdUserData = NULL;
+		if(g_hash_table_lookup_extended(_state.registry, GINT_TO_POINTER(fd), NULL, &fdUserData)) {
+			size_t lengthArg = numBytes > 0 ? (size_t) numBytes : 0;
+			log("kqtime-preload: read() calling handler for %d\n", fd);
+			_state.inHandler(_state.userData, fd, buf, lengthArg, fdUserData);
+		}
+	}
+
+	/* return the sys return value */
+	return numBytes;
 }
 
