@@ -32,14 +32,13 @@
 
 typedef void (*KQTimePreloadHandlerFunc)(void* userData, int fd, const void* buf, size_t n);
 typedef void (*KQTimePreloadRegisterFunc)(int fd);
-typedef void (*KQTimePreloadDeregisterFunc)(int fd);
 
 typedef void (*KQTimePreloadInitFunc)(void* userData, KQTimePreloadHandlerFunc,
 		KQTimePreloadHandlerFunc, KQTimePreloadRegisterFunc*,
-		KQTimePreloadDeregisterFunc*);
+		KQTimePreloadRegisterFunc*);
 
 void kqtime_preload_init(void* userData,
 		KQTimePreloadHandlerFunc inHandler, KQTimePreloadHandlerFunc outHandler,
-		KQTimePreloadRegisterFunc* reg, KQTimePreloadDeregisterFunc* dereg);
+		KQTimePreloadRegisterFunc* reg, KQTimePreloadRegisterFunc* dereg);
 
 #endif /* KQTIME_PRELOAD_H_ */

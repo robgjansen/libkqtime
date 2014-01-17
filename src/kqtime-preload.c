@@ -52,7 +52,7 @@ static void _kqtime_preload_deregister(int fd) {
 
 void kqtime_preload_init(gpointer userData,
 		KQTimePreloadHandlerFunc inHandler, KQTimePreloadHandlerFunc outHandler,
-		KQTimePreloadRegisterFunc* reg, KQTimePreloadDeregisterFunc* dereg) {
+		KQTimePreloadRegisterFunc* reg, KQTimePreloadRegisterFunc* dereg) {
 	_state.userData = userData;
 	_state.inHandler = inHandler;
 	_state.outHandler = outHandler;

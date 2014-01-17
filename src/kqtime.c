@@ -96,7 +96,7 @@ struct _KQTime {
 	struct {
 		KQTimePreloadInitFunc init;
 		KQTimePreloadRegisterFunc reg;
-		KQTimePreloadDeregisterFunc dereg;
+		KQTimePreloadRegisterFunc dereg;
 	} preloadLibFuncs;
 
 	GThread* inPCapThread;
