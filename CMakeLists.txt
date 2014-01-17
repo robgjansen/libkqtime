@@ -67,5 +67,7 @@ add_library(kqtime-preload SHARED src/kqtime-preload.c)
 add_library(kqtime SHARED src/kqtime.c)
 target_link_libraries(kqtime-preload ${GLIB_CORE_LIBRARIES} ${DL_LIBRARIES})
 target_link_libraries(kqtime ${GLIB_CORE_LIBRARIES} ${GLIB_GTHREAD_LIBRARIES} ${PCAP_LIBRARIES} ${DL_LIBRARIES})
+
 install(TARGETS kqtime-preload DESTINATION lib)
 install(TARGETS kqtime DESTINATION lib)
+install(FILES src/kqtime.h DESTINATION include/)
