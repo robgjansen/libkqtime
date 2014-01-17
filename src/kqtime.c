@@ -14,20 +14,20 @@
 #define KQTIME_TAG_LENGTH 16
 #define KQTIME_MAX_SEARCH_TIME 2
 
-#undef IOCTL_INQ
+#undef KQTIME_IOCTL_INQ
 #ifdef SIOCINQ
-#define IOCTL_INQ SIOCINQ
+#define KQTIME_IOCTL_INQ SIOCINQ
 #elif defined ( TIOCINQ )
-#define IOCTL_INQ TIOCINQ
+#define KQTIME_IOCTL_INQ TIOCINQ
 #elif defined ( FIONREAD )
-#define IOCTL_INQ FIONREAD
+#define KQTIME_IOCTL_INQ FIONREAD
 #endif
 
-#undef IOCTL_OUTQ
+#undef KQTIME_IOCTL_OUTQ
 #ifdef SIOCOUTQ
-#define IOCTL_OUTQ SIOCOUTQ
+#define KQTIME_IOCTL_OUTQ SIOCOUTQ
 #elif defined ( TIOCOUTQ )
-#define IOCTL_OUTQ TIOCOUTQ
+#define KQTIME_IOCTL_OUTQ TIOCOUTQ
 #endif
 
 typedef enum _KQTimeCommandType {
@@ -415,15 +415,15 @@ static void _kqtime_collectStats(gpointer key, gpointer value, GString* status) 
 		numErrors++;
 	}
 
-#ifdef IOCTL_OUTQ
-	if (ioctl(fd, IOCTL_OUTQ, &sendLength) < 0) {
+#ifdef KQTIME_IOCTL_OUTQ
+	if (ioctl(fd, KQTIME_IOCTL_OUTQ, &sendLength) < 0) {
 		log("kqtime: failed to obtain OUTQLEN for socket %d: %s", fd, strerror(errno));
 		numErrors++;
 	}
 #endif
 
-#ifdef IOCTL_INQ
-	if (ioctl(fd, IOCTL_INQ, &receiveLength) < 0) {
+#ifdef KQTIME_IOCTL_INQ
+	if (ioctl(fd, KQTIME_IOCTL_INQ, &receiveLength) < 0) {
 		log("kqtime: failed to obtain INQLEN for socket %d: %s", fd, strerror(errno));
 		numErrors++;
 	}
