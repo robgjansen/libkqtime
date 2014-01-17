@@ -21,6 +21,7 @@ typedef struct _KQTimeCommand {
 typedef struct _KQTimeTagCommand {
 	KQTimeCommand base;
 	gint fd;
+	gpointer fdUserData;
 	guchar tag[KQTIME_TAG_LENGTH];
 	struct timeval tagTime;
 } KQTimeTagCommand;
@@ -28,6 +29,7 @@ typedef struct _KQTimeTagCommand {
 typedef struct _KQTimeDataCommand {
 	KQTimeCommand base;
 	gint fd;
+	gpointer fdUserData;
 	gpointer data;
 	gint dataLength;
 	struct timeval dataTime;
@@ -45,6 +47,7 @@ typedef struct _KQTimeSearchWorker {
 	GAsyncQueue* pcapWorkerCommands;
 	KQTimeFoundMatchFunc matchCallback;
 	gint fd;
+	gpointer fdUserData;
 	guchar tag[KQTIME_TAG_LENGTH];
 	gboolean hasTag;
 	struct timeval tagTime;
@@ -54,7 +57,7 @@ struct _KQTime {
 	struct {
 		KQTimePreloadInitFunc init;
 		KQTimePreloadRegisterFunc reg;
-		KQTimePreloadRegisterFunc dereg;
+		KQTimePreloadDeregisterFunc dereg;
 	} preloadLibFuncs;
 
 	GThread* inPCapThread;
@@ -72,13 +75,14 @@ struct _KQTime {
 
 /* this is running in main thread, so keep it as short as possible */
 static void _kqtime_inboundInterposedDataHandler(KQTime* kqt,
-		gint fd, gconstpointer buf, gsize n) {
+		gint fd, gconstpointer buf, gsize n, gpointer fdData) {
 	/* if the worker has a tag, send it data */
 	if(kqt->inSearchWorker && kqt->inSearchWorker->hasTag) {
 		KQTimeDataCommand* dataCommand = g_new0(KQTimeDataCommand, 1);
 		gettimeofday(&dataCommand->dataTime, NULL);
 		dataCommand->base.type = KQTIME_CMD_DATA;
 		dataCommand->fd = fd;
+		dataCommand->fdUserData = fdData;
 		dataCommand->dataLength = (gint)n;
 		dataCommand->data = g_new(guchar, dataCommand->dataLength);
 		memcpy(dataCommand->data,buf, n);
@@ -88,7 +92,7 @@ static void _kqtime_inboundInterposedDataHandler(KQTime* kqt,
 
 /* this is running in main thread, so keep it as short as possible */
 static void _kqtime_outboundInterposedDataHandler(KQTime* kqt,
-		gint fd, gconstpointer buf, gsize n) {
+		gint fd, gconstpointer buf, gsize n, gpointer fdData) {
 	/* if the worker is idle, send it another tag */
 	if(kqt->outSearchWorker && !kqt->outSearchWorker->hasTag) {
 		if(n < ((gsize) KQTIME_TAG_OFFSET+KQTIME_TAG_LENGTH)) {
@@ -101,6 +105,7 @@ static void _kqtime_outboundInterposedDataHandler(KQTime* kqt,
 		KQTimeTagCommand* tagCommand = g_new0(KQTimeTagCommand, 1);
 		tagCommand->base.type = KQTIME_CMD_TAG;
 		tagCommand->fd = fd;
+		tagCommand->fdUserData = fdData;
 		tagCommand->tagTime = now;
 		memcpy(tagCommand->tag, &((const guchar*)buf)[KQTIME_TAG_OFFSET], KQTIME_TAG_LENGTH);
 		g_async_queue_push(kqt->outSearchWorker->commands, tagCommand);
@@ -157,6 +162,7 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 					/* tag commands sometimes contains the fd */
 					if(tagCommand->fd) {
 						worker->fd = tagCommand->fd;
+						worker->fdUserData = tagCommand->fdUserData;
 					}
 				}
 				break;
@@ -174,6 +180,7 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 						/* data commands sometimes contains the fd */
 						if(dataCommand->fd) {
 							worker->fd = dataCommand->fd;
+							worker->fdUserData = dataCommand->fdUserData;
 						}
 
 						/* look for a match */
@@ -182,7 +189,7 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 
 						/* tell the app we found a match, and the times */
 						if (match) {
-							worker->matchCallback(NULL, worker->fd,
+							worker->matchCallback(worker->fdUserData, worker->fd,
 									worker->tagTime, dataCommand->dataTime);
 							isIdle = TRUE;
 						}
@@ -211,6 +218,7 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 		if(isIdle) {
 			worker->hasTag = FALSE;
 			worker->fd = 0;
+			worker->fdUserData = NULL;
 			command = g_new0(KQTimeCommand, 1);
 			command->type = KQTIME_CMD_READY;
 			g_async_queue_push(worker->pcapWorkerCommands, command);
@@ -472,12 +480,12 @@ KQTime* kqtime_new(KQTimeFoundMatchFunc inMatchCallback,
 	return kqt;
 }
 
-void kqtime_register(KQTime* kqt, int fd) {
+void* kqtime_register(KQTime* kqt, int fd, void* fdUserData) {
 	g_assert(kqt && kqt->preloadLibFuncs.reg);
-	kqt->preloadLibFuncs.reg(fd);
+	return kqt->preloadLibFuncs.reg(fd, fdUserData);
 }
 
-void kqtime_deregister(KQTime* kqt, int fd) {
+void* kqtime_deregister(KQTime* kqt, int fd) {
 	g_assert(kqt && kqt->preloadLibFuncs.dereg);
-	kqt->preloadLibFuncs.dereg(fd);
+	return kqt->preloadLibFuncs.dereg(fd);
 }

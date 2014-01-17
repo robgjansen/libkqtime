@@ -30,14 +30,16 @@
 #define GET_SYSTEM_FUNC(funcptr, funcstr) SETSYM_OR_FAIL(RTLD_NEXT, funcptr, funcstr)
 #define GET_PRELOAD_FUNC(funcptr, funcstr) SETSYM_OR_FAIL(RTLD_DEFAULT, funcptr, funcstr)
 
-typedef void (*KQTimePreloadHandlerFunc)(void* userData, int fd, const void* buf, size_t n);
-typedef void (*KQTimePreloadRegisterFunc)(int fd);
-typedef void (*KQTimePreloadInitFunc)(gpointer, KQTimePreloadHandlerFunc,
-		KQTimePreloadHandlerFunc, KQTimePreloadRegisterFunc*,
-		KQTimePreloadRegisterFunc*);
+typedef void (*KQTimePreloadHandlerFunc)(void* userData, int fd, const void* buf, size_t n, void* fdUserData);
+typedef void* (*KQTimePreloadRegisterFunc)(int fd, void* fdData);
+typedef void* (*KQTimePreloadDeregisterFunc)(int fd);
 
-void kqtime_preload_init(gpointer userData,
+typedef void (*KQTimePreloadInitFunc)(void* userData, KQTimePreloadHandlerFunc,
+		KQTimePreloadHandlerFunc, KQTimePreloadRegisterFunc*,
+		KQTimePreloadDeregisterFunc*);
+
+void kqtime_preload_init(void* userData,
 		KQTimePreloadHandlerFunc inHandler, KQTimePreloadHandlerFunc outHandler,
-		KQTimePreloadRegisterFunc* reg, KQTimePreloadRegisterFunc* dereg);
+		KQTimePreloadRegisterFunc* reg, KQTimePreloadDeregisterFunc* dereg);
 
 #endif /* KQTIME_PRELOAD_H_ */
