@@ -1,15 +1,30 @@
-libkqtime
-=========
+# libkqtime
 
-A library that tracks the queuing time of bytes traveling through the kernel
+a library that tracks the queuing time of bytes traveling through the kernel
 
-build
------
+## build
 
+### out of source (recommended)
+
+'''
+mkdir build
+cd build
+cmake .. -D<option>
+make
+'''
+
+### in source
+
+'''
 cmake . -D<option>
+make
+'''
 
-build options
---------------------------
+### build <option>s
 
-CMAKE_BUILD_TYPE=Debug
-CMAKE_INSTALL_PREFIX=path/to/install
+ + `CMAKE_BUILD_TYPE=Debug`
+ + `CMAKE_INSTALL_PREFIX=path/to/install`
+
+## more info
+
+see the `doc` directory
