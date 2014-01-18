@@ -756,7 +756,7 @@ void kqtime_register(KQTime* kqt, gint fd, const gchar* fdName) {
 		KQTimeFDCommand* addFDCommand = g_new0(KQTimeFDCommand, 1);
 		addFDCommand->base.type = KQTIME_CMD_ADDFD;
 		addFDCommand->base.fd = fd;
-		addFDCommand->fdName = g_strdup(fdName);
+		addFDCommand->fdName = fdName ? g_strdup(fdName) : NULL;
 		g_async_queue_push(kqt->statsWorker->commands, addFDCommand);
 	}
 
