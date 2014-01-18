@@ -143,7 +143,7 @@ static void _kqtime_inboundInterposedDataHandler(KQTime* kqt,
 		dataCommand->dataLength = (gint)n;
 		dataCommand->data = g_new(guchar, dataCommand->dataLength);
 		memcpy(dataCommand->data,buf, n);
-		g_async_queue_push(kqt->outSearchWorker->commands, dataCommand);
+		g_async_queue_push(kqt->inSearchWorker->commands, dataCommand);
 	}
 }
 
