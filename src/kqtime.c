@@ -115,6 +115,7 @@ struct _KQTime {
 	KQTimeStatsWorker* statsWorker;
 };
 
+#ifdef DEBUG
 static const gchar* _kqtime_commandTypeToString(KQTimeCommandType t) {
   switch(t) {
 	  case KQTIME_CMD_READY: return "READY";
@@ -130,6 +131,7 @@ static const gchar* _kqtime_commandTypeToString(KQTimeCommandType t) {
   }
   return "ERR";
 }
+#endif
 
 /* this is running in main thread, so keep it as short as possible */
 static void _kqtime_inboundInterposedDataHandler(KQTime* kqt,
@@ -262,12 +264,15 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 								dataCommand->dataLength, (u_char *)worker->tag, KQTIME_TAG_LENGTH);
 
 						if (match) {
-							/* notify the stats worker to collect */
+							/* notify the stats worker to collect, we already collect when
+							 * we get the tag, reduce verbosity unless debugging */
+#ifdef DEBUG
 							if(worker->statsWorkerCommands) {
 								KQTimeCommand* collectCommand = g_new0(KQTimeCommand, 1);
 								collectCommand->type = KQTIME_CMD_COLLECT;
 								g_async_queue_push(worker->statsWorkerCommands, collectCommand);
 							}
+#endif
 
 							/* log the fact that we found a match, and the times */
 							if(worker->logWorkerCommands) {
