@@ -198,10 +198,23 @@ static int _kqtime_findByteMatch(const u_char *in, int in_len,
 
 static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 	gboolean doExit = FALSE;
-	gboolean isIdle = FALSE;
+	gboolean isIdle = TRUE;
 
 	while(!doExit) {
-		KQTimeCommand* command = g_async_queue_pop(worker->commands);
+		KQTimeCommand* command = NULL;
+
+		/* tell the pcap thread if we finished a search */
+		if(isIdle) {
+			worker->hasTag = FALSE;
+			worker->fd = 0;
+			command = g_new0(KQTimeCommand, 1);
+			command->type = KQTIME_CMD_READY;
+			g_async_queue_push(worker->pcapWorkerCommands, command);
+			command = NULL;
+			isIdle = FALSE;
+		}
+
+		command = g_async_queue_pop(worker->commands);
 
 		if(!command) {
 			continue;
@@ -288,16 +301,6 @@ static void _kqtime_searchWorkerThreadMain(KQTimeSearchWorker* worker) {
 
 		/* all cmds except data have no internals and can be freed normally */
 		g_free(command);
-
-		/* tell the pcap thread if we finished a search */
-		if(isIdle) {
-			worker->hasTag = FALSE;
-			worker->fd = 0;
-			command = g_new0(KQTimeCommand, 1);
-			command->type = KQTIME_CMD_READY;
-			g_async_queue_push(worker->pcapWorkerCommands, command);
-			isIdle = FALSE;
-		}
 	}
 }
 
