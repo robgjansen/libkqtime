@@ -531,7 +531,7 @@ static void _kqtime_statsWorkerThreadMain(KQTimeStatsWorker* worker) {
 				gchar* fdName = g_hash_table_lookup(descs, GINT_TO_POINTER(logCommand->base.fd));
 
 				GString* output = g_string_new(NULL);
-				g_string_printf(output, "KQTIME-%s;start=%lu.%06lu,end=%lu.%06lu,fd=%d;name=%s;\n",
+				g_string_printf(output, "KQTIME-%s;start=%lu.%06lu,end=%lu.%06lu,fd=%d;%s;\n",
 						logCommand->isInbound ? "IN" : "OUT",
 						(gulong) logCommand->tagTime.tv_sec, (gulong) logCommand->tagTime.tv_usec,
 						(gulong) logCommand->matchTime.tv_sec, (gulong) logCommand->matchTime.tv_usec,
