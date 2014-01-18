@@ -514,9 +514,9 @@ static void _kqtime_statsWorkerThreadMain(KQTimeStatsWorker* worker) {
 						n, status->str);
 
 				if(worker->logFile) {
-					fwrite(output->str, output->len, (gsize)1, worker->logFile);
+					fputs(output->str, worker->logFile);
 				} else if(worker->gzLogFile) {
-					gzwrite(worker->gzLogFile, output->str, (guint)output->len);
+					gzputs(worker->gzLogFile, output->str);
 				}
 
 				g_string_free(output, TRUE);
@@ -538,9 +538,9 @@ static void _kqtime_statsWorkerThreadMain(KQTimeStatsWorker* worker) {
 						logCommand->base.fd, fdName ? (gchar*)fdName : "NULL");
 
 				if(worker->logFile) {
-					fwrite(output->str, output->len, (gsize)1, worker->logFile);
+					fputs(output->str, worker->logFile);
 				} else if(worker->gzLogFile) {
-					gzwrite(worker->gzLogFile, output->str, (guint)output->len);
+					gzputs(worker->gzLogFile, output->str);
 				}
 
 				g_string_free(output, TRUE);
@@ -629,6 +629,7 @@ static void _kqtime_freeStatsThreadWorkerHelper(GThread* thread, KQTimeStatsWork
 		fclose(worker->logFile);
 	}
 	if(worker->gzLogFile) {
+		gzflush(worker->gzLogFile, Z_FINISH);
 		gzclose(worker->gzLogFile);
 	}
 
