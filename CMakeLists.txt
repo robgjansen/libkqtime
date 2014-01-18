@@ -62,12 +62,13 @@ add_definitions(-D_GNU_SOURCE)
 add_cflags(-fPIC)
 message(STATUS "CMAKE_C_FLAGS = ${CMAKE_C_FLAGS}")
 
-## build libraries
+## build libraries and set install location
 add_library(kqtime-preload SHARED src/kqtime-preload.c)
-add_library(kqtime SHARED src/kqtime.c)
 target_link_libraries(kqtime-preload ${GLIB_CORE_LIBRARIES} ${DL_LIBRARIES})
-target_link_libraries(kqtime ${GLIB_CORE_LIBRARIES} ${GLIB_GTHREAD_LIBRARIES} ${PCAP_LIBRARIES} ${DL_LIBRARIES})
-
 install(TARGETS kqtime-preload DESTINATION lib)
+
+add_library(kqtime SHARED src/kqtime.c)
+target_link_libraries(kqtime ${GLIB_CORE_LIBRARIES} ${GLIB_GTHREAD_LIBRARIES} ${PCAP_LIBRARIES} ${DL_LIBRARIES})
 install(TARGETS kqtime DESTINATION lib)
-install(FILES src/kqtime.h DESTINATION include/)
+
+install(FILES src/kqtime.h DESTINATION include)
