@@ -56,6 +56,8 @@ find_package(PCAP REQUIRED)
 include_directories(${PCAP_INCLUDES})
 find_package(GLIB REQUIRED)
 include_directories(${GLIB_INCLUDES})
+find_package(ZLIB REQUIRED)
+include_directories(${ZLIB_INCLUDES})
 
 ## CFLAGS status update
 add_definitions(-D_GNU_SOURCE)
@@ -68,7 +70,7 @@ target_link_libraries(kqtime-preload ${GLIB_CORE_LIBRARIES} ${DL_LIBRARIES})
 install(TARGETS kqtime-preload DESTINATION lib)
 
 add_library(kqtime SHARED src/kqtime.c)
-target_link_libraries(kqtime ${GLIB_CORE_LIBRARIES} ${GLIB_GTHREAD_LIBRARIES} ${PCAP_LIBRARIES} ${DL_LIBRARIES})
+target_link_libraries(kqtime ${GLIB_CORE_LIBRARIES} ${GLIB_GTHREAD_LIBRARIES} ${ZLIB_LIBRARIES} ${PCAP_LIBRARIES} ${DL_LIBRARIES})
 install(TARGETS kqtime DESTINATION lib)
 
 install(FILES src/kqtime.h DESTINATION include)

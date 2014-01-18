@@ -6,6 +6,7 @@
 #include <errno.h>
 
 #include <pcap.h>
+#include <zlib.h>
 #include <glib.h>
 #include <glib/gstdio.h>
 
@@ -90,6 +91,7 @@ typedef struct _KQTimeSearchWorker {
 typedef struct _KQTimeStatsWorker {
 	GAsyncQueue* commands;
 	FILE* logFile;
+	gzFile gzLogFile;
 } KQTimeStatsWorker;
 
 struct _KQTime {
@@ -505,11 +507,19 @@ static void _kqtime_statsWorkerThreadMain(KQTimeStatsWorker* worker) {
 				g_hash_table_foreach(descs, (GHFunc)_kqtime_collectStats, status);
 				gettimeofday(&end, NULL);
 
-				g_fprintf(worker->logFile, "KQTIME-STATS;start=%lu.%06lu,end=%lu.%06lu,num_fds=%u;%s\n",
+				GString* output = g_string_new(NULL);
+				g_string_printf(output, "KQTIME-STATS;start=%lu.%06lu,end=%lu.%06lu,num_fds=%u;%s\n",
 						(gulong) start.tv_sec, (gulong) start.tv_usec,
 						(gulong) end.tv_sec, (gulong) end.tv_usec,
 						n, status->str);
 
+				if(worker->logFile) {
+					fwrite(output->str, output->len, (gsize)1, worker->logFile);
+				} else if(worker->gzLogFile) {
+					gzwrite(worker->gzLogFile, output->str, (guint)output->len);
+				}
+
+				g_string_free(output, TRUE);
 				g_string_free(status, TRUE);
 
 				break;
@@ -520,11 +530,21 @@ static void _kqtime_statsWorkerThreadMain(KQTimeStatsWorker* worker) {
 
 				gchar* fdName = g_hash_table_lookup(descs, GINT_TO_POINTER(logCommand->base.fd));
 
-				g_fprintf(worker->logFile, "KQTIME-%s;start=%lu.%06lu,end=%lu.%06lu,fd=%d;name=%s;\n",
+				GString* output = g_string_new(NULL);
+				g_string_printf(output, "KQTIME-%s;start=%lu.%06lu,end=%lu.%06lu,fd=%d;name=%s;\n",
 						logCommand->isInbound ? "IN" : "OUT",
 						(gulong) logCommand->tagTime.tv_sec, (gulong) logCommand->tagTime.tv_usec,
 						(gulong) logCommand->matchTime.tv_sec, (gulong) logCommand->matchTime.tv_usec,
 						logCommand->base.fd, fdName ? (gchar*)fdName : "NULL");
+
+				if(worker->logFile) {
+					fwrite(output->str, output->len, (gsize)1, worker->logFile);
+				} else if(worker->gzLogFile) {
+					gzwrite(worker->gzLogFile, output->str, (guint)output->len);
+				}
+
+				g_string_free(output, TRUE);
+
 				break;
 			}
 
@@ -608,6 +628,9 @@ static void _kqtime_freeStatsThreadWorkerHelper(GThread* thread, KQTimeStatsWork
 	if(worker->logFile) {
 		fclose(worker->logFile);
 	}
+	if(worker->gzLogFile) {
+		gzclose(worker->gzLogFile);
+	}
 
 	if(worker) {
 		if(worker->commands) {
@@ -670,11 +693,20 @@ KQTime* kqtime_new(const gchar* logFilePath, gint logBufferStats, gint logInTime
 		kqt->statsWorker = g_new0(KQTimeStatsWorker, 1);
 		kqt->statsWorker->commands = g_async_queue_new();
 
-		kqt->statsWorker->logFile = g_fopen(logFilePath, "ab");
-		if(!kqt->statsWorker->logFile) {
-			log("kqtime: unable to open log file for appending\n");
-			kqtime_free(kqt);
-			return NULL;
+		if(g_str_has_suffix(logFilePath, ".gz")) {
+			kqt->statsWorker->gzLogFile = gzopen(logFilePath, "ab");
+			if(!kqt->statsWorker->gzLogFile) {
+				log("kqtime: unable to open gz log file for appending\n");
+				kqtime_free(kqt);
+				return NULL;
+			}
+		} else {
+			kqt->statsWorker->logFile = fopen(logFilePath, "ab");
+			if(!kqt->statsWorker->logFile) {
+				log("kqtime: unable to open log file for appending\n");
+				kqtime_free(kqt);
+				return NULL;
+			}
 		}
 	}
 
