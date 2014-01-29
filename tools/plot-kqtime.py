@@ -50,8 +50,9 @@ pylab.rcParams.update({
 def main():
     data = parse(sys.stdin)
     pp = PdfPages('kqtimes.pdf')
-    #plot(pp, data)
-    plot_mean(pp, data)
+    plot(pp, data)
+    plot_time(pp, data)
+    #plot_mean(pp, data)
     pp.close()
 
 def parse(datain):
@@ -82,7 +83,7 @@ def plot(pp, d):
     pylab.plot(x, y, c='r', label='outq')
 
     pylab.legend(loc="lower right", prop={'size': 10})
-    pylab.title("Mean Queue Time Per Second")
+    pylab.title("Queue Time Measurements")
     pylab.xlabel("Queue Time (ms)")
     #pylab.xscale('log')
     pylab.ylabel("Cumulative Fraction")
@@ -95,7 +96,7 @@ def plot(pp, d):
     pylab.plot(x, y, c='r', label='outq')
 
     pylab.legend(loc="lower right", prop={'size': 10})
-    pylab.title("Mean Total Queue Length Per Second")
+    pylab.title("Total Queue Length Measurements")
     pylab.xlabel("Total Queue Length (KiB)")
     #pylab.xscale('log')
     pylab.ylabel("Cumulative Fraction")
