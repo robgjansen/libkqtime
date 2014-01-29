@@ -58,6 +58,7 @@ def parse(datain):
     data = {}
     for line in datain:
         parts = line.strip().split()
+        if len(parts) != 3: continue
         ts = int(float(parts[0]))
         valtype = parts[1] # KQLEN-IN, KQLEN-OUT, KQTIME-IN, KQTIME-OUT
         val = float(parts[2]) / 1024.0 if 'LEN' in valtype else float(parts[2])
