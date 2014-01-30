@@ -26,17 +26,19 @@ def parse(datain):
 def worker(taskq, loglock):
     msgs = []
     for line in iter(taskq.get, 'STOP'):
-        parts = line.strip().split(';')
-        if parts[0] == "KQTIME-OUT" or parts[0] == "KQTIME-IN":
-            ts, ms = get_time_data(parts)
-            msgs.append("{0} {1} {2}".format("%06f"%ts, parts[0], ms))
-        elif parts[0] == "KQTIME-STATS":
-            ts, ms = get_time_data(parts)
-            outlen, inlen = get_stats_data(parts)
-            msgs.append("{0} KQLEN-OUT {1}".format("%06f"%ts, outlen))
-            msgs.append("{0} KQLEN-IN {1}".format("%06f"%ts, inlen))
-        if len(msgs) > 1000: flush_messages(loglock, msgs)
-        taskq.task_done()
+        try:
+            parts = line.strip().split(';')
+            if parts[0] == "KQTIME-OUT" or parts[0] == "KQTIME-IN":
+                ts, ms = get_time_data(parts)
+                msgs.append("{0} {1} {2}".format("%06f"%ts, parts[0], ms))
+            elif parts[0] == "KQTIME-STATS":
+                ts, ms = get_time_data(parts)
+                outlen, inlen = get_stats_data(parts)
+                msgs.append("{0} KQLEN-OUT {1}".format("%06f"%ts, outlen))
+                msgs.append("{0} KQLEN-IN {1}".format("%06f"%ts, inlen))
+            if len(msgs) > 1000: flush_messages(loglock, msgs)
+            taskq.task_done()
+        except: continue
     flush_messages(loglock, msgs)
 
 def flush_messages(l, msgs):
