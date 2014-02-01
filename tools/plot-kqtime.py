@@ -13,6 +13,8 @@ from matplotlib.backends.backend_pdf import PdfPages
 import sys, pylab
 from numpy import mean
 
+DORASTER=False # set to True to reduce pdf size
+
 pylab.rcParams.update({
     'backend': 'PDF',
     'font.size': 16,
@@ -57,15 +59,20 @@ def main():
 
 def parse(datain):
     data = {}
+    n, ncorrupt = 0, 0
     for line in datain:
-        parts = line.strip().split()
-        if len(parts) != 3: continue
-        ts = int(float(parts[0]))
-        valtype = parts[1] # KQLEN-IN, KQLEN-OUT, KQTIME-IN, KQTIME-OUT
-        val = float(parts[2]) / 1024.0 if 'LEN' in valtype else float(parts[2])
-        if ts not in data: data[ts] = {}
-        if valtype not in data[ts]: data[ts][valtype] = []
-        data[ts][valtype].append(val)
+        n += 1
+        try:
+            parts = line.strip().split()
+            if len(parts) != 3: raise
+            ts = int(float(parts[0]))
+            valtype = parts[1] # KQLEN-IN, KQLEN-OUT, KQTIME-IN, KQTIME-OUT
+            val = float(parts[2]) / 1024.0 if 'LEN' in valtype else float(parts[2])
+            if ts not in data: data[ts] = {}
+            if valtype not in data[ts]: data[ts][valtype] = []
+            data[ts][valtype].append(val)
+        except: ncorrupt += 1
+    if ncorrupt > 0: print "warning: found {0}/{1} corrupt line(s)".format(ncorrupt, n)
     return data
 
 def plot(pp, d):
@@ -78,9 +85,9 @@ def plot(pp, d):
 
     pylab.figure()
     x, y = getcdf(tin)
-    pylab.plot(x, y, c='b', label='inq')
+    pylab.plot(x, y, c='b', label='inq', rasterized=DORASTER)
     x, y = getcdf(tout)
-    pylab.plot(x, y, c='r', label='outq')
+    pylab.plot(x, y, c='r', label='outq', rasterized=DORASTER)
 
     pylab.legend(loc="lower right", prop={'size': 10})
     pylab.title("Queue Time Measurements")
@@ -91,9 +98,9 @@ def plot(pp, d):
 
     pylab.figure()
     x, y = getcdf(lin)
-    pylab.plot(x, y, c='b', label='inq')
+    pylab.plot(x, y, c='b', label='inq', rasterized=DORASTER)
     x, y = getcdf(lout)
-    pylab.plot(x, y, c='r', label='outq')
+    pylab.plot(x, y, c='r', label='outq', rasterized=DORASTER)
 
     pylab.legend(loc="lower right", prop={'size': 10})
     pylab.title("Total Queue Length Measurements")
@@ -129,8 +136,9 @@ def plot_time(pp, d):
             toutx.append(h)
 
     pylab.figure()
-    pylab.scatter(toutx, touty, label='outq', marker='x', s=10, c='r')
-    pylab.scatter(tinx, tiny, label='inq', marker='+', s=10, c='b')
+
+    pylab.scatter(toutx, touty, label='outq data', marker='x', s=10, c='r', rasterized=DORASTER)
+    pylab.scatter(tinx, tiny, label='inq data', marker='+', s=10, c='b', rasterized=DORASTER)
 
     pylab.legend(loc="upper right", prop={'size': 10})
     #pylab.title("Tor Relay Kernel Queuing Time")
@@ -142,8 +150,8 @@ def plot_time(pp, d):
     pp.savefig()
 
     pylab.figure()
-    pylab.scatter(loutx, louty, label='outq', marker='x', s=10, c='r')
-    pylab.scatter(linx, liny, label='inq', marker='+', s=10, c='b')
+    pylab.scatter(loutx, louty, label='outq', marker='x', s=10, c='r', rasterized=DORASTER)
+    pylab.scatter(linx, liny, label='inq', marker='+', s=10, c='b', rasterized=DORASTER)
 
     pylab.legend(loc="upper right", prop={'size': 10})
     #pylab.title("Tor Relay Kernel Queue Length")
