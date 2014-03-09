@@ -100,6 +100,8 @@ CFLAGS="-I/home/user/.local/include" LDFLAGS="-L/home/user/.local/lib" LIBS="-lk
 
 ### Run Tor with libkqtime
 
+Root privileges are required because libkqtime uses libpcap to capture packets in real time.
+
 ```
 sudo LD_LIBRARY_PATH=/home/user/.local/lib/ LD_PRELOAD=/home/user/.local/lib/libkqtime-preload.so ./src/or/tor
 ```
