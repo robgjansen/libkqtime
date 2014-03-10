@@ -29,7 +29,7 @@ An out of source build, and local install is recommended:
 cd libkqtime
 mkdir build
 cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=/home/user/.local
+cmake .. -DCMAKE_INSTALL_PREFIX=/home/${USER}/.local
 make
 make install
 ```
@@ -88,14 +88,14 @@ cd torclone
 git checkout -b kqtime origin/kqtime
 ```
 
-This gives a new config option that can be used like: `KQTimeLogFile "/home/user/tor/kqtime.log.gz"`. This filepath will be passed into the `kqtime_new` function, and statistics will be collected for all sockets created by Tor.
+This gives a new config option that can be used like: `KQTimeLogFile "/home/${USER}/tor/kqtime.log.gz"`. This filepath will be passed into the `kqtime_new` function, and statistics will be collected for all sockets created by Tor.
 
 ### Build, Link, and Run Tor
 
-Assuming libkqtime was installed to `/home/user/.local`, and using the torclone branch from above, Tor should be compiled as follows:
+Assuming libkqtime was installed to `/home/${USER}/.local`, and using the torclone branch from above, Tor should be compiled as follows:
 
 ```
-CFLAGS="-I/home/user/.local/include" LDFLAGS="-L/home/user/.local/lib" LIBS="-lkqtime" ./configure --disable-asciidoc
+CFLAGS="-I/home/${USER}/.local/include" LDFLAGS="-L/home/${USER}/.local/lib" LIBS="-lkqtime" ./configure --disable-asciidoc
 ```
 
 ### Run Tor with libkqtime
@@ -103,6 +103,6 @@ CFLAGS="-I/home/user/.local/include" LDFLAGS="-L/home/user/.local/lib" LIBS="-lk
 Root privileges are required because libkqtime uses libpcap to capture packets in real time.
 
 ```
-sudo LD_LIBRARY_PATH=/home/user/.local/lib/ LD_PRELOAD=/home/user/.local/lib/libkqtime-preload.so ./src/or/tor
+sudo LD_LIBRARY_PATH=/home/${USER}/.local/lib/ LD_PRELOAD=/home/${USER}/.local/lib/libkqtime-preload.so ./src/or/tor
 ```
 
