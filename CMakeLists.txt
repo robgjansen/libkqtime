@@ -1,4 +1,4 @@
-project(libkqtime)
+project(libkqtime C)
 
 ## ensure cmake version
 cmake_minimum_required(VERSION 2.8.0 FATAL_ERROR)
