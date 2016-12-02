@@ -95,7 +95,7 @@ This gives a new config option that can be used like: `KQTimeLogFile "/home/${US
 Assuming libkqtime was installed to `/home/${USER}/.local`, and using the torclone branch from above, Tor should be compiled as follows:
 
 ```
-CFLAGS="-I/home/${USER}/.local/include" LDFLAGS="-L/home/${USER}/.local/lib" LIBS="-lkqtime" ./configure --disable-asciidoc
+LD_LIBRARY_PATH=/home/${USER}/.local/lib/ CFLAGS="-I/home/${USER}/.local/include" LDFLAGS="-L/home/${USER}/.local/lib" LIBS="-lkqtime" ./configure --disable-asciidoc
 ```
 
 ### Run Tor with libkqtime
