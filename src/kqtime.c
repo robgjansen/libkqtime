@@ -373,11 +373,13 @@ static void _kqtime_pcapWorkerThreadMain(KQTimePCapWorker* worker) {
 	log("kqtime: packet capture stopped [%d]\n", rc);
 }
 
-static pcap_t* _kqtime_newPCap(pcap_direction_t pcapdir, int snaplen) {
+static pcap_t* _kqtime_newPCap(const char* source, const char* filter_expression,
+        pcap_direction_t pcapdir, int snaplen) {
 	char errbuf[PCAP_ERRBUF_SIZE];
 	struct bpf_program filter;
 
-	pcap_t* handle = pcap_create(NULL, errbuf);
+	const char* pcap_source = source ? source : NULL;
+	pcap_t* handle = pcap_create(pcap_source, errbuf);
 	if(!handle) {
 		log("kqtime: error obtaining pcap handle: %s\n", errbuf);
 		return NULL;
@@ -401,7 +403,8 @@ static pcap_t* _kqtime_newPCap(pcap_direction_t pcapdir, int snaplen) {
 		return NULL;
 	}
 
-	if(pcap_compile(handle, &filter, "tcp and not port ssh",
+	const char* pcap_filter_expression = filter_expression ? filter_expression : "tcp and not port ssh";
+	if(pcap_compile(handle, &filter, pcap_filter_expression,
 			0, PCAP_NETMASK_UNKNOWN) != 0) {
 		log("kqtime: error compiling filter: %s\n", pcap_geterr(handle));
 		pcap_close(handle);
@@ -661,7 +664,8 @@ void kqtime_free(KQTime* kqt) {
 	g_free(kqt);
 }
 
-KQTime* kqtime_new(const gchar* logFilePath, gint logBufferStats, gint logInTimes, gint logOutTimes) {
+KQTime* kqtime_new_full(const char* logFilePath, int logBufferStats, int logInTimes, int logOutTimes,
+        const char* custom_pcap_source, const char* custom_pcap_filter_expression) {
 	if(!logFilePath) {
 		return NULL;
 	}
@@ -716,7 +720,8 @@ KQTime* kqtime_new(const gchar* logFilePath, gint logBufferStats, gint logInTime
 		kqt->inPCapWorker->isInbound = TRUE;
 		kqt->inPCapWorker->commands = g_async_queue_new();
 
-		kqt->inPCapWorker->pcapHandle = _kqtime_newPCap(PCAP_D_IN, 300);
+		kqt->inPCapWorker->pcapHandle = _kqtime_newPCap(custom_pcap_source,
+		        custom_pcap_filter_expression, PCAP_D_IN, 300);
 		if(!kqt->inPCapWorker->pcapHandle) {
 			kqtime_free(kqt);
 			return NULL;
@@ -743,7 +748,8 @@ KQTime* kqtime_new(const gchar* logFilePath, gint logBufferStats, gint logInTime
 		kqt->outPCapWorker->isInbound = FALSE;
 		kqt->outPCapWorker->commands = g_async_queue_new();
 
-		kqt->outPCapWorker->pcapHandle = _kqtime_newPCap(PCAP_D_OUT, 65536);
+		kqt->outPCapWorker->pcapHandle = _kqtime_newPCap(custom_pcap_source,
+		        custom_pcap_filter_expression, PCAP_D_OUT, 65536);
 		if(!kqt->outPCapWorker->pcapHandle) {
 			kqtime_free(kqt);
 			return NULL;
@@ -780,6 +786,10 @@ KQTime* kqtime_new(const gchar* logFilePath, gint logBufferStats, gint logInTime
 	log("kqtime: successfully initialized\n");
 
 	return kqt;
+}
+
+KQTime* kqtime_new(const char* logFilePath, int logBufferStats, int logInTimes, int logOutTimes) {
+    return kqtime_new_full(logFilePath, logBufferStats, logInTimes, logOutTimes, NULL, NULL);
 }
 
 void kqtime_register(KQTime* kqt, gint fd, const gchar* fdName) {
