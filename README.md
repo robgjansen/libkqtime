@@ -80,12 +80,12 @@ Then check for the `.pdf` files in the current directory.
 
 ### Instrument Tor
 
-See [this branch](https://github.com/robgjansen/torclone/tree/kqtime) for the modifications made to Tor to make use of libkqtime.
+See [this branch](https://github.com/robgjansen/tor/tree/support/kqtime) for the modifications made to Tor to make use of libkqtime.
 
 ```
-git clone https://github.com/robgjansen/torclone.git
-cd torclone
-git checkout -b kqtime origin/kqtime
+git clone https://github.com/robgjansen/tor.git
+cd tor
+git checkout -b kqtime origin/support/kqtime
 ```
 
 This gives a new config option that can be used like: `KQTimeLogFile "/home/${USER}/tor/kqtime.log.gz"`. This filepath will be passed into the `kqtime_new` function, and statistics will be collected for all sockets created by Tor.
